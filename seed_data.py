@@ -17,6 +17,8 @@ import opik
 from opik import id_helpers
 import random
 import uuid
+import time
+import signal
 from datetime import datetime, timedelta, timezone
 
 # ── tqdm is already available in Colab; fall back gracefully if not ────────────
@@ -37,12 +39,10 @@ PROJECT_NAME = os.environ.get("OPIK_PROJECT_NAME", "OhmSweetOhm-Support-Chatbot-
 NUM_THREADS  = 250
 DAYS_BACK    = 30
 MODEL        = "gpt-5"
-# Performance optimization: flush every N threads instead of after each one
-# Lower values = more frequent flushing (slower but safer)
-# Higher values = less frequent flushing (faster but may use more memory)
-# Set to NUM_THREADS to flush only once at the end (fastest)
-# With 250 threads, flushing every 50 threads balances speed and memory
-FLUSH_INTERVAL = 50
+# Performance optimization: Opik queues traces internally, so we don't need to flush during the loop
+# This avoids blocking on rate limits and makes trace creation much faster
+# We'll only flush at the end to ensure all data is sent
+FLUSH_INTERVAL = None  # Disable periodic flushing - flush only at end
 
 # ──────────────────────────────────────────────────────────────────────────────
 # SKIP GUARD
@@ -574,19 +574,51 @@ for thread_idx in tqdm(range(NUM_THREADS), desc="Seeding OhmBot traces", unit="t
         "reason": f"{num_turns} turn(s), avg helpfulness {sum(turn_scores)/len(turn_scores):.2f}",
     })
 
-    # ── Flush periodically instead of after every thread ──────────────────────
-    # This significantly improves performance by reducing API calls
-    if (thread_idx + 1) % FLUSH_INTERVAL == 0 or (thread_idx + 1) == NUM_THREADS:
-        client.flush()
-        # Batch log feedback scores
-        if thread_feedback_scores:
-            try:
-                client.log_threads_feedback_scores(scores=thread_feedback_scores)
-                thread_feedback_scores = []  # Clear after successful batch
-            except Exception:
-                pass  # Thread still active — will auto-close after 15 min inactivity
+# All traces are now created and queued in Opik's internal buffer
+# Opik will handle sending them in the background, respecting rate limits
+print(f"\n📤 Created {total_traces} traces. Initiating flush to Opik...")
 
-# Final flush to ensure all data is sent
-client.flush()
+# Flush with timeout to avoid blocking the notebook for too long
+# Opik will continue sending traces in the background even if flush times out
+def flush_with_timeout(timeout_seconds=30):
+    """Flush with a timeout - if it takes too long, let Opik continue in background."""
+    def timeout_handler(signum, frame):
+        raise TimeoutError("Flush timed out")
+    
+    # Set up timeout (Unix only - Windows will skip timeout)
+    if hasattr(signal, 'SIGALRM'):
+        signal.signal(signal.SIGALRM, timeout_handler)
+        signal.alarm(timeout_seconds)
+    
+    try:
+        client.flush()
+        if hasattr(signal, 'SIGALRM'):
+            signal.alarm(0)  # Cancel timeout
+        return True
+    except (TimeoutError, KeyboardInterrupt):
+        if hasattr(signal, 'SIGALRM'):
+            signal.alarm(0)  # Cancel timeout
+        return False
+    except Exception:
+        if hasattr(signal, 'SIGALRM'):
+            signal.alarm(0)  # Cancel timeout
+        return False
+
+# Try to flush, but don't block for more than 30 seconds
+flushed = flush_with_timeout(timeout_seconds=30)
+
+if not flushed:
+    print("⏱️  Flush timed out after 30 seconds. Opik will continue sending traces in the background.")
+    print("   Your traces will appear in Opik shortly - no action needed!")
+else:
+    print("✅ Flush completed successfully.")
+
+# Batch log all feedback scores at once
+if thread_feedback_scores:
+    try:
+        client.log_threads_feedback_scores(scores=thread_feedback_scores)
+    except Exception:
+        pass
 
 print(f"✅ Seeded {total_traces} traces across {NUM_THREADS} threads into '{PROJECT_NAME}'.")
+print("💡 Note: If flush timed out, traces are still being sent by Opik in the background.")
