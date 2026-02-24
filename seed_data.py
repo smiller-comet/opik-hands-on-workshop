@@ -21,7 +21,7 @@ except ImportError:
 # ──────────────────────────────────────────────────────────────────────────────
 # CONFIG
 # ──────────────────────────────────────────────────────────────────────────────
-PROJECT_NAME = "OhmSweetOhm-Support-Chatbot"
+PROJECT_NAME = os.environ.get("OPIK_PROJECT_NAME", "OhmSweetOhm-Support-Chatbot-Opik-Workshop")
 NUM_THREADS  = 75    # ~150-200 traces total, runs in ~25 seconds
 DAYS_BACK    = 30
 MODEL        = "gpt-5"
@@ -29,6 +29,7 @@ MODEL        = "gpt-5"
 # ──────────────────────────────────────────────────────────────────────────────
 # SKIP GUARD — don't re-seed if the project already has traces
 # ──────────────────────────────────────────────────────────────────────────────
+opik.configure(use_local=False)
 client = opik.Opik(project_name=PROJECT_NAME)
 
 try:
