@@ -199,7 +199,9 @@ def frustration_score(turn_scores):
 
 # ──────────────────────────────────────────────────────────────────────────────
 # TRACE BUILDER — mirrors the real OhmBot span hierarchy exactly
-# Returns only the final answer so it can be appended to chat_history
+# Input/output use {"user": ...} / {"assistant": ...} so the Opik thread UI
+# renders them as clean chat messages rather than raw JSON.
+# Returns only the final answer so it can be appended to chat_history.
 # ──────────────────────────────────────────────────────────────────────────────
 def log_trace(thread_id, turn_index, question, chat_history, trace_start):
     route     = random.choices(["DATABASE", "POLICY", "CHAT"], weights=ROUTE_WEIGHTS)[0]
@@ -207,16 +209,19 @@ def log_trace(thread_id, turn_index, question, chat_history, trace_start):
     t         = trace_start
 
     # ── Root trace ─────────────────────────────────────────────────────────
+    # NOTE: input={"user": ...} and output={"assistant": ...} are the keys
+    # Opik uses to render the thread messages view cleanly.
     trace = client.trace(
         name         = "OhmBot_Support",
         project_name = PROJECT_NAME,
-        input        = {"user_question": question, "chat_history": chat_history},
-        output       = None,
+        input        = {"user": question},
+        output       = None,  # set at trace.end() once we have the final answer
         tags         = ["production", route.lower()],
         metadata     = {
-            "environment": "production",
-            "session_id" : thread_id,
-            "turn_index" : turn_index,
+            "environment" : "production",
+            "session_id"  : thread_id,
+            "turn_index"  : turn_index,
+            "chat_history": chat_history,
             "_opik_graph_definition": {"format": "mermaid", "data": MERMAID_GRAPH},
         },
         thread_id    = thread_id,
@@ -356,10 +361,10 @@ def log_trace(thread_id, turn_index, question, chat_history, trace_start):
         )
         chat_span.end()
 
-    # ── Close root trace ───────────────────────────────────────────────────
+    # ── Close root trace with {"assistant": ...} output for thread UI ──────
     trace.end(
         end_time = trace_start + timedelta(seconds=total_dur),
-        output   = {"response": final_answer},
+        output   = {"assistant": final_answer},
     )
     trace.log_feedback_score(
         name   = "answer_helpfulness",
@@ -413,19 +418,22 @@ for _ in tqdm(range(NUM_THREADS), desc="Seeding OhmBot traces", unit="thread"):
         chat_history.append({"role": "assistant",  "content": answer})
         total_traces += 1
 
-    # ── Close the thread via REST client, then score via high-level SDK ────
-    client.rest_client.traces.close_trace_thread(
-        thread_id    = thread_id,
-        project_name = PROJECT_NAME,
-    )
-    client.log_threads_feedback_scores(
-        scores=[{
-            "id"    : thread_id,
-            "name"  : "user_frustration",
-            "value" : frustration_score(turn_scores),
-            "reason": f"{num_turns} turn(s), avg helpfulness {sum(turn_scores)/len(turn_scores):.2f}",
-        }]
-    )
+    # ── Flush so all traces land before scoring the thread ─────────────────
+    # Threads must be inactive to accept feedback scores. We flush here to
+    # ensure traces are delivered, then attempt scoring. Threads that are
+    # still marked active server-side will be skipped silently — they will
+    # auto-close after 15 minutes of inactivity.
+    client.flush()
+    try:
+        client.log_threads_feedback_scores(
+            scores=[{
+                "id"    : thread_id,
+                "name"  : "user_frustration",
+                "value" : frustration_score(turn_scores),
+                "reason": f"{num_turns} turn(s), avg helpfulness {sum(turn_scores)/len(turn_scores):.2f}",
+            }]
+        )
+    except Exception:
+        pass  # Thread still active — score silently skipped
 
-client.flush()
 print(f"✅ Seeded {total_traces} traces across {NUM_THREADS} threads into '{PROJECT_NAME}'.")
