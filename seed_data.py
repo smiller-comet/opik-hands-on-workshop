@@ -21,10 +21,10 @@ except ImportError:
 # ──────────────────────────────────────────────────────────────────────────────
 # CONFIG
 # ──────────────────────────────────────────────────────────────────────────────
-PROJECT_NAME = "OhmBot-Support"
+PROJECT_NAME = "OhmSweetOhm-Support-Chatbot"
 NUM_THREADS  = 75    # ~150-200 traces total, runs in ~25 seconds
 DAYS_BACK    = 30
-MODEL        = "gpt-4o"
+MODEL        = "gpt-5"
 
 # ──────────────────────────────────────────────────────────────────────────────
 # SKIP GUARD — don't re-seed if the project already has traces
