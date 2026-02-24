@@ -1,8 +1,9 @@
 """
 seed_data.py
-Populates the OhmBot-Support Opik project with 30 days of synthetic
-production traces. Skips automatically if data already exists.
+Populates the OhmSweetOhm-Support-Chatbot-Opik-Workshop Opik project with 30 days
+of synthetic production traces. Skips automatically if data already exists.
 """
+
 import os
 import sys
 import opik
@@ -412,8 +413,11 @@ for _ in tqdm(range(NUM_THREADS), desc="Seeding OhmBot traces", unit="thread"):
         chat_history.append({"role": "assistant",  "content": answer})
         total_traces += 1
 
-    # ── Close the thread and log frustration score directly against it ─────
-    client.traces.close_trace_thread(thread_id=thread_id)
+    # ── Close the thread via REST client, then score via high-level SDK ────
+    client.rest_client.traces.close_trace_thread(
+        thread_id    = thread_id,
+        project_name = PROJECT_NAME,
+    )
     client.log_threads_feedback_scores(
         scores=[{
             "id"    : thread_id,
