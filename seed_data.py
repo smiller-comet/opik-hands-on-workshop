@@ -3,7 +3,7 @@ seed_data.py
 Populates the OhmBot-Support Opik project with 30 days of synthetic
 production traces. Skips automatically if data already exists.
 """
-
+import os
 import sys
 import opik
 import random
