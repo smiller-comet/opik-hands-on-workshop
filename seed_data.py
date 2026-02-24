@@ -17,8 +17,6 @@ import opik
 from opik import id_helpers
 import random
 import uuid
-import time
-import signal
 from datetime import datetime, timedelta, timezone
 
 # ── tqdm is already available in Colab; fall back gracefully if not ────────────
@@ -33,16 +31,9 @@ except ImportError:
 # CONFIG
 # ──────────────────────────────────────────────────────────────────────────────
 PROJECT_NAME = os.environ.get("OPIK_PROJECT_NAME", "OhmSweetOhm-Support-Chatbot-Opik-Workshop")
-# NUM_THREADS: Set to generate ~500 traces
-# Expected traces per thread = 2.05 (weighted avg of 1-4 turns: 35%, 35%, 20%, 10%)
-# 250 threads * 2.05 ≈ 512 traces
-NUM_THREADS  = 250
+NUM_THREADS  = 100
 DAYS_BACK    = 30
 MODEL        = "gpt-5"
-# Performance optimization: Opik queues traces internally, so we don't need to flush during the loop
-# This avoids blocking on rate limits and makes trace creation much faster
-# We'll only flush at the end to ensure all data is sent
-FLUSH_INTERVAL = None  # Disable periodic flushing - flush only at end
 
 # ──────────────────────────────────────────────────────────────────────────────
 # SKIP GUARD
@@ -324,10 +315,7 @@ def log_trace(thread_id, turn_index, question, answer, route, chat_history, trac
         output       = None,
         tags         = ["production", route.lower()],
         metadata     = {
-            "environment" : "production",
-            "session_id"  : thread_id,
-            "turn_index"  : turn_index,
-            "chat_history": chat_history,
+            # Only keep essential metadata - removed redundant fields to reduce payload size
             "_opik_graph_definition": {"format": "mermaid", "data": MERMAID_GRAPH},
         },
         thread_id    = thread_id,
@@ -349,13 +337,8 @@ def log_trace(thread_id, turn_index, question, answer, route, chat_history, trac
         usage      = make_usage(30, 120, 1, 5),
         start_time = router_span_start,
         end_time   = router_span_start + timedelta(seconds=router_dur),
-        metadata   = {"temperature": 0},
     )
-    router_span.log_feedback_score(
-        name   = "classification_correctness",
-        value  = classification_score(),
-        reason = f"Routed to {route}",
-    )
+    # Skip feedback score on router span to reduce API calls - we log thread-level scores instead
     router_span.end()
     t += timedelta(seconds=router_dur)
 
@@ -388,7 +371,6 @@ def log_trace(thread_id, turn_index, question, answer, route, chat_history, trac
             output     = {"result": "| col1 | col2 |\n|------|------|\n| val1 | val2 |"},
             start_time = tool_span_start,
             end_time   = tool_span_start + timedelta(seconds=tool_dur),
-            metadata   = {"database": "ohm_sweet_ohm.db"},
         )
         tool_span.end()
         t += timedelta(seconds=tool_dur)
@@ -436,7 +418,6 @@ def log_trace(thread_id, turn_index, question, answer, route, chat_history, trac
             output     = {"chunks": [context], "n_results": random.randint(1, 3)},
             start_time = retrieval_span_start,
             end_time   = retrieval_span_start + timedelta(seconds=retrieval_dur),
-            metadata   = {"index": "faq.txt"},
         )
         retrieval_span.end()
         t += timedelta(seconds=retrieval_dur)
@@ -503,11 +484,12 @@ def log_trace(thread_id, turn_index, question, answer, route, chat_history, trac
 # ──────────────────────────────────────────────────────────────────────────────
 now = datetime.now(timezone.utc)
 total_traces = 0
-thread_feedback_scores = []  # Batch feedback scores for efficiency
 
 for thread_idx in tqdm(range(NUM_THREADS), desc="Seeding OhmBot traces", unit="thread"):
     thread_id    = f"session-{uuid.uuid4().hex[:12]}"
-    num_turns    = random.choices([1, 2, 3, 4], weights=[35, 35, 20, 10])[0]
+    # Weights adjusted to average ~3 traces per thread: [5, 20, 50, 25] for [1, 2, 3, 4] turns
+    # Expected value: 1*0.05 + 2*0.20 + 3*0.50 + 4*0.25 = 2.95 ≈ 3 traces per thread
+    num_turns    = random.choices([1, 2, 3, 4], weights=[5, 20, 50, 25])[0]
     days_ago     = random.betavariate(2, 5) * DAYS_BACK
     # Calculate historical timestamp - ensure it's timezone-aware
     thread_start = now - timedelta(days=days_ago, minutes=random.randint(0, 120))
@@ -566,59 +548,18 @@ for thread_idx in tqdm(range(NUM_THREADS), desc="Seeding OhmBot traces", unit="t
         chat_history.append({"role": "assistant",  "content": answer})
         total_traces += 1
 
-    # ── Collect thread-level frustration score for batch logging ────────────
-    thread_feedback_scores.append({
-        "id"    : thread_id,
-        "name"  : "user_frustration",
-        "value" : frustration_score(turn_scores),
-        "reason": f"{num_turns} turn(s), avg helpfulness {sum(turn_scores)/len(turn_scores):.2f}",
-    })
-
-# All traces are now created and queued in Opik's internal buffer
-# Opik will handle sending them in the background, respecting rate limits
-print(f"\n📤 Created {total_traces} traces. Initiating flush to Opik...")
-
-# Flush with timeout to avoid blocking the notebook for too long
-# Opik will continue sending traces in the background even if flush times out
-def flush_with_timeout(timeout_seconds=30):
-    """Flush with a timeout - if it takes too long, let Opik continue in background."""
-    def timeout_handler(signum, frame):
-        raise TimeoutError("Flush timed out")
-    
-    # Set up timeout (Unix only - Windows will skip timeout)
-    if hasattr(signal, 'SIGALRM'):
-        signal.signal(signal.SIGALRM, timeout_handler)
-        signal.alarm(timeout_seconds)
-    
+    # ── Flush then attempt thread-level frustration score ──────────────────
+    client.flush()
     try:
-        client.flush()
-        if hasattr(signal, 'SIGALRM'):
-            signal.alarm(0)  # Cancel timeout
-        return True
-    except (TimeoutError, KeyboardInterrupt):
-        if hasattr(signal, 'SIGALRM'):
-            signal.alarm(0)  # Cancel timeout
-        return False
+        client.log_threads_feedback_scores(
+            scores=[{
+                "id"    : thread_id,
+                "name"  : "user_frustration",
+                "value" : frustration_score(turn_scores),
+                "reason": f"{num_turns} turn(s), avg helpfulness {sum(turn_scores)/len(turn_scores):.2f}",
+            }]
+        )
     except Exception:
-        if hasattr(signal, 'SIGALRM'):
-            signal.alarm(0)  # Cancel timeout
-        return False
-
-# Try to flush, but don't block for more than 30 seconds
-flushed = flush_with_timeout(timeout_seconds=30)
-
-if not flushed:
-    print("⏱️  Flush timed out after 30 seconds. Opik will continue sending traces in the background.")
-    print("   Your traces will appear in Opik shortly - no action needed!")
-else:
-    print("✅ Flush completed successfully.")
-
-# Batch log all feedback scores at once
-if thread_feedback_scores:
-    try:
-        client.log_threads_feedback_scores(scores=thread_feedback_scores)
-    except Exception:
-        pass
+        pass  # Thread still active — will auto-close after 15 min inactivity
 
 print(f"✅ Seeded {total_traces} traces across {NUM_THREADS} threads into '{PROJECT_NAME}'.")
-print("💡 Note: If flush timed out, traces are still being sent by Opik in the background.")
