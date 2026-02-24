@@ -2,11 +2,19 @@
 seed_data.py
 Populates the OhmSweetOhm-Support-Chatbot-Opik-Workshop Opik project with 30 days
 of synthetic production traces. Skips automatically if data already exists.
+
+Note on Historical Timestamps:
+Traces are created with historical start_time and end_time values to simulate
+production data from the past 30 days. To ensure traces appear in dashboards
+under their historical dates (not ingestion date), trace and span IDs are generated
+using id_helpers.generate_id() with the historical timestamp. This is critical
+for proper date grouping in Opik dashboards.
 """
 
 import os
 import sys
 import opik
+from opik import id_helpers
 import random
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -290,9 +298,17 @@ def frustration_score(turn_scores):
 def log_trace(thread_id, turn_index, question, answer, route, chat_history, trace_start, sql=None, context=None):
     total_dur = random.uniform(1.2, 9.0)
     t         = trace_start
+    
+    # Ensure timestamp is timezone-aware for proper Opik dashboard grouping
+    if t.tzinfo is None:
+        t = t.replace(tzinfo=timezone.utc)
+    
+    # Generate trace ID with historical timestamp - CRITICAL for dashboard date grouping
+    trace_id = id_helpers.generate_id(timestamp=t)
 
     # ── Root trace ─────────────────────────────────────────────────────────
     trace = client.trace(
+        id           = trace_id,  # Use generated ID with historical timestamp
         name         = "OhmBot_Support",
         project_name = PROJECT_NAME,
         input        = {"user": question},
@@ -311,7 +327,10 @@ def log_trace(thread_id, turn_index, question, answer, route, chat_history, trac
 
     # ── Router span ────────────────────────────────────────────────────────
     router_dur  = random.uniform(0.3, 0.9)
+    router_span_start = t
+    router_span_id = id_helpers.generate_id(timestamp=router_span_start)
     router_span = trace.span(
+        id         = router_span_id,  # Use generated ID with historical timestamp
         name       = "route_user_request",
         type       = "llm",
         model      = MODEL,
@@ -319,8 +338,8 @@ def log_trace(thread_id, turn_index, question, answer, route, chat_history, trac
         input      = {"messages": [{"role": "user", "content": f"Classify: {question}"}]},
         output     = {"choices": [{"message": {"content": route}}]},
         usage      = make_usage(30, 120, 1, 5),
-        start_time = t,
-        end_time   = t + timedelta(seconds=router_dur),
+        start_time = router_span_start,
+        end_time   = router_span_start + timedelta(seconds=router_dur),
         metadata   = {"temperature": 0},
     )
     router_span.log_feedback_score(
@@ -334,72 +353,90 @@ def log_trace(thread_id, turn_index, question, answer, route, chat_history, trac
     # ── Workflow branches ──────────────────────────────────────────────────
     if route == "DATABASE":
         sql_gen_dur = random.uniform(0.8, 2.5)
+        sql_gen_start = t
+        sql_gen_id = id_helpers.generate_id(timestamp=sql_gen_start)
         sql_gen = trace.span(
+            id         = sql_gen_id,
             name       = "SQL_Generation_Step",
             type       = "llm", model=MODEL, provider="openai",
             input      = {"messages": [{"role": "user", "content": question}]},
             output     = {"tool_call": {"name": "run_sql_query", "arguments": {"query": sql}}},
             usage      = make_usage(150, 400, 20, 60),
-            start_time = t,
-            end_time   = t + timedelta(seconds=sql_gen_dur),
+            start_time = sql_gen_start,
+            end_time   = sql_gen_start + timedelta(seconds=sql_gen_dur),
         )
         sql_gen.end()
         t += timedelta(seconds=sql_gen_dur)
 
         tool_dur  = random.uniform(0.05, 0.3)
+        tool_span_start = t
+        tool_span_id = id_helpers.generate_id(timestamp=tool_span_start)
         tool_span = trace.span(
+            id         = tool_span_id,
             name       = "run_sql_query",
             type       = "tool",
             input      = {"query": sql},
             output     = {"result": "| col1 | col2 |\n|------|------|\n| val1 | val2 |"},
-            start_time = t,
-            end_time   = t + timedelta(seconds=tool_dur),
+            start_time = tool_span_start,
+            end_time   = tool_span_start + timedelta(seconds=tool_dur),
             metadata   = {"database": "ohm_sweet_ohm.db"},
         )
         tool_span.end()
         t += timedelta(seconds=tool_dur)
 
         final_dur  = random.uniform(0.5, 1.5)
+        final_span_start = t
+        final_span_id = id_helpers.generate_id(timestamp=final_span_start)
         final_span = trace.span(
+            id         = final_span_id,
             name       = "SQL_Final_Answer_Step",
             type       = "llm", model=MODEL, provider="openai",
             input      = {"messages": [{"role": "user", "content": question}]},
             output     = {"choices": [{"message": {"content": answer}}]},
             usage      = make_usage(200, 500, 40, 150),
-            start_time = t,
-            end_time   = t + timedelta(seconds=final_dur),
+            start_time = final_span_start,
+            end_time   = final_span_start + timedelta(seconds=final_dur),
         )
         final_span.end()
 
     elif route == "POLICY":
         rag_gen_dur = random.uniform(0.6, 1.8)
+        rag_gen_start = t
+        rag_gen_id = id_helpers.generate_id(timestamp=rag_gen_start)
         rag_gen = trace.span(
+            id         = rag_gen_id,
             name       = "RAG_Query_Generation",
             type       = "llm", model=MODEL, provider="openai",
             input      = {"messages": [{"role": "user", "content": question}]},
             output     = {"tool_call": {"name": "look_up_policy", "arguments": {"query": question}}},
             usage      = make_usage(100, 300, 10, 40),
-            start_time = t,
-            end_time   = t + timedelta(seconds=rag_gen_dur),
+            start_time = rag_gen_start,
+            end_time   = rag_gen_start + timedelta(seconds=rag_gen_dur),
         )
         rag_gen.end()
         t += timedelta(seconds=rag_gen_dur)
 
         retrieval_dur  = random.uniform(0.1, 0.5)
+        retrieval_span_start = t
+        retrieval_span_id = id_helpers.generate_id(timestamp=retrieval_span_start)
         retrieval_span = trace.span(
+            id         = retrieval_span_id,
             name       = "look_up_policy",
             type       = "tool",
             input      = {"query": question},
             output     = {"chunks": [context], "n_results": random.randint(1, 3)},
-            start_time = t,
-            end_time   = t + timedelta(seconds=retrieval_dur),
+            start_time = retrieval_span_start,
+            end_time   = retrieval_span_start + timedelta(seconds=retrieval_dur),
             metadata   = {"index": "faq.txt"},
         )
         retrieval_span.end()
         t += timedelta(seconds=retrieval_dur)
 
         final_dur  = random.uniform(0.6, 2.0)
+        final_span_start = t
+        final_span_id = id_helpers.generate_id(timestamp=final_span_start)
         final_span = trace.span(
+            id         = final_span_id,
             name       = "RAG_Final_Answer_Step",
             type       = "llm", model=MODEL, provider="openai",
             input      = {"messages": [
@@ -409,14 +446,17 @@ def log_trace(thread_id, turn_index, question, answer, route, chat_history, trac
             ]},
             output     = {"choices": [{"message": {"content": answer}}]},
             usage      = make_usage(250, 600, 50, 200),
-            start_time = t,
-            end_time   = t + timedelta(seconds=final_dur),
+            start_time = final_span_start,
+            end_time   = final_span_start + timedelta(seconds=final_dur),
         )
         final_span.end()
 
     else:  # CHAT
         chat_dur  = random.uniform(0.4, 1.2)
+        chat_span_start = t
+        chat_span_id = id_helpers.generate_id(timestamp=chat_span_start)
         chat_span = trace.span(
+            id         = chat_span_id,
             name       = "run_chat_workflow",
             type       = "llm", model=MODEL, provider="openai",
             input      = {"messages": [
@@ -425,14 +465,19 @@ def log_trace(thread_id, turn_index, question, answer, route, chat_history, trac
             ]},
             output     = {"choices": [{"message": {"content": answer}}]},
             usage      = make_usage(50, 150, 20, 80),
-            start_time = t,
-            end_time   = t + timedelta(seconds=chat_dur),
+            start_time = chat_span_start,
+            end_time   = chat_span_start + timedelta(seconds=chat_dur),
         )
         chat_span.end()
 
     # ── Close root trace ───────────────────────────────────────────────────
+    # Ensure end_time is also timezone-aware
+    trace_end = trace_start + timedelta(seconds=total_dur)
+    if trace_end.tzinfo is None:
+        trace_end = trace_end.replace(tzinfo=timezone.utc)
+    
     trace.end(
-        end_time = trace_start + timedelta(seconds=total_dur),
+        end_time = trace_end,
         output   = {"assistant": answer},
     )
     trace.log_feedback_score(
@@ -454,7 +499,10 @@ for _ in tqdm(range(NUM_THREADS), desc="Seeding OhmBot traces", unit="thread"):
     thread_id    = f"session-{uuid.uuid4().hex[:12]}"
     num_turns    = random.choices([1, 2, 3, 4], weights=[35, 35, 20, 10])[0]
     days_ago     = random.betavariate(2, 5) * DAYS_BACK
+    # Calculate historical timestamp - ensure it's timezone-aware
     thread_start = now - timedelta(days=days_ago, minutes=random.randint(0, 120))
+    if thread_start.tzinfo is None:
+        thread_start = thread_start.replace(tzinfo=timezone.utc)
 
     # Pick route and a matching turn dict for this whole thread
     route = random.choices(["DATABASE", "POLICY", "CHAT"], weights=ROUTE_WEIGHTS)[0]
