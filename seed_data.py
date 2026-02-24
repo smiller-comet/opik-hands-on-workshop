@@ -18,8 +18,6 @@ from opik import id_helpers
 import random
 import uuid
 from datetime import datetime, timedelta, timezone
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from threading import Lock
 
 # ── tqdm is already available in Colab; fall back gracefully if not ────────────
 try:
@@ -43,22 +41,14 @@ MODEL        = "gpt-5"
 # Lower values = more frequent flushing (slower but safer)
 # Higher values = less frequent flushing (faster but may use more memory)
 # Set to NUM_THREADS to flush only once at the end (fastest)
-# With 250 threads, flushing every 25 threads balances speed and memory
-FLUSH_INTERVAL = 25
-# Parallel processing: number of worker threads for concurrent trace ingestion
-# Higher values = faster but more API load. Recommended: 10-20 for good balance
-MAX_WORKERS = 15
+# With 250 threads, flushing every 50 threads balances speed and memory
+FLUSH_INTERVAL = 50
 
 # ──────────────────────────────────────────────────────────────────────────────
 # SKIP GUARD
 # ──────────────────────────────────────────────────────────────────────────────
 opik.configure(use_local=False)
 client = opik.Opik(project_name=PROJECT_NAME)
-
-# Thread-safe lock for coordinating flushes and feedback score collection
-flush_lock = Lock()
-feedback_scores_lock = Lock()
-thread_feedback_scores = []  # Shared list for collecting feedback scores
 
 try:
     existing = client.search_traces(project_name=PROJECT_NAME, max_results=1)
@@ -507,12 +497,15 @@ def log_trace(thread_id, turn_index, question, answer, route, chat_history, trac
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# PROCESS SINGLE THREAD (for parallel execution)
-# Processes one conversation thread and returns feedback score data
+# MAIN LOOP
+# Each thread picks one turn dict (first turn) then uses that dict's follow_ups
+# for subsequent turns — so every conversation stays on topic.
 # ──────────────────────────────────────────────────────────────────────────────
-def process_thread(thread_idx, now):
-    """Process a single conversation thread and return its feedback score."""
-    # Each worker uses the global client (Opik client should be thread-safe for trace creation)
+now = datetime.now(timezone.utc)
+total_traces = 0
+thread_feedback_scores = []  # Batch feedback scores for efficiency
+
+for thread_idx in tqdm(range(NUM_THREADS), desc="Seeding OhmBot traces", unit="thread"):
     thread_id    = f"session-{uuid.uuid4().hex[:12]}"
     num_turns    = random.choices([1, 2, 3, 4], weights=[35, 35, 20, 10])[0]
     days_ago     = random.betavariate(2, 5) * DAYS_BACK
@@ -536,7 +529,6 @@ def process_thread(thread_idx, now):
 
     chat_history = []
     turn_scores  = []
-    traces_created = 0
 
     for turn in range(num_turns):
         turn_start = thread_start + timedelta(minutes=turn * random.uniform(2, 8))
@@ -572,69 +564,29 @@ def process_thread(thread_idx, now):
         turn_scores.append(helpfulness_score())
         chat_history.append({"role": "user",      "content": question})
         chat_history.append({"role": "assistant",  "content": answer})
-        traces_created += 1
+        total_traces += 1
 
-    # Return feedback score data for batch logging
-    return {
+    # ── Collect thread-level frustration score for batch logging ────────────
+    thread_feedback_scores.append({
         "id"    : thread_id,
         "name"  : "user_frustration",
         "value" : frustration_score(turn_scores),
         "reason": f"{num_turns} turn(s), avg helpfulness {sum(turn_scores)/len(turn_scores):.2f}",
-    }, traces_created
+    })
 
-
-# ──────────────────────────────────────────────────────────────────────────────
-# MAIN LOOP - PARALLEL PROCESSING
-# Uses ThreadPoolExecutor to process multiple threads concurrently
-# ──────────────────────────────────────────────────────────────────────────────
-now = datetime.now(timezone.utc)
-total_traces = 0
-
-print(f"🚀 Starting parallel trace ingestion with {MAX_WORKERS} workers...")
-
-# Process threads in parallel
-with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-    # Submit all tasks
-    future_to_idx = {
-        executor.submit(process_thread, idx, now): idx 
-        for idx in range(NUM_THREADS)
-    }
-    
-    # Process completed tasks with progress bar
-    for future in tqdm(as_completed(future_to_idx), total=NUM_THREADS, desc="Seeding traces", unit="thread"):
-        try:
-            feedback_score, traces = future.result()
-            total_traces += traces
-            
-            # Thread-safely collect feedback scores and flush periodically
-            scores_to_flush = None
-            with feedback_scores_lock:
-                thread_feedback_scores.append(feedback_score)
-                
-                # Check if we've hit the flush interval
-                if len(thread_feedback_scores) >= FLUSH_INTERVAL:
-                    scores_to_flush = thread_feedback_scores.copy()
-                    thread_feedback_scores.clear()
-            
-            # Flush outside the lock to avoid blocking other workers
-            if scores_to_flush:
-                with flush_lock:
-                    client.flush()
-                    try:
-                        client.log_threads_feedback_scores(scores=scores_to_flush)
-                    except Exception:
-                        pass  # Thread still active — will auto-close after 15 min inactivity
-        except Exception as e:
-            print(f"⚠️  Error processing thread {future_to_idx[future]}: {e}")
-
-# Final flush and feedback score logging
-with flush_lock:
-    client.flush()
-    with feedback_scores_lock:
+    # ── Flush periodically instead of after every thread ──────────────────────
+    # This significantly improves performance by reducing API calls
+    if (thread_idx + 1) % FLUSH_INTERVAL == 0 or (thread_idx + 1) == NUM_THREADS:
+        client.flush()
+        # Batch log feedback scores
         if thread_feedback_scores:
             try:
                 client.log_threads_feedback_scores(scores=thread_feedback_scores)
+                thread_feedback_scores = []  # Clear after successful batch
             except Exception:
-                pass
+                pass  # Thread still active — will auto-close after 15 min inactivity
+
+# Final flush to ensure all data is sent
+client.flush()
 
 print(f"✅ Seeded {total_traces} traces across {NUM_THREADS} threads into '{PROJECT_NAME}'.")
