@@ -23,12 +23,12 @@ except ImportError:
 # CONFIG
 # ──────────────────────────────────────────────────────────────────────────────
 PROJECT_NAME = os.environ.get("OPIK_PROJECT_NAME", "OhmSweetOhm-Support-Chatbot-Opik-Workshop")
-NUM_THREADS  = 75    # ~150-200 traces total, runs in ~25 seconds
+NUM_THREADS  = 75
 DAYS_BACK    = 30
 MODEL        = "gpt-5"
 
 # ──────────────────────────────────────────────────────────────────────────────
-# SKIP GUARD — don't re-seed if the project already has traces
+# SKIP GUARD
 # ──────────────────────────────────────────────────────────────────────────────
 opik.configure(use_local=False)
 client = opik.Opik(project_name=PROJECT_NAME)
@@ -39,129 +39,214 @@ try:
         print("✅ Demo data already exists — skipping seed.")
         sys.exit(0)
 except Exception:
-    pass  # Project doesn't exist yet, continue with seeding
+    pass
 
 # ──────────────────────────────────────────────────────────────────────────────
-# SAMPLE DATA  (matched to ohm_sweet_ohm.db schema)
+# CONVERSATION DATA
+# Each entry is a tuple of (question, answer, sql) so they always stay matched.
+# follow_ups are realistic second/third turn messages that continue the thread.
 # ──────────────────────────────────────────────────────────────────────────────
-DATABASE_QUESTIONS = [
-    "How many AirStream Wireless Earbuds do you have in stock?",
-    "Is the NexGen Pro Gaming Console available?",
-    "Do you have the CrystalView 4K Smart TV in 65 inch?",
-    "What's the stock level for the PlayStation 5?",
-    "Are there any PulseSync Fitness Trackers left?",
-    "How much does the NexusWave Pro Headphones cost?",
-    "What is the price of the BudgetSmart LED TV 55 inch?",
-    "How much is the ProGamer Controller?",
-    "Where is my order? My order ID is ORD-10482.",
-    "Can you check the status of order ORD-77210?",
-    "Has my order ORD-33891 shipped yet?",
-    "What's the current location of order ORD-55124?",
-    "Are there any deals on gaming products right now?",
-    "Is the SonicBlast Studio Headphones on sale?",
-    "What promotions are running on TVs?",
-    "Which stores carry the Racing Wheel Pro?",
-    "What audio products are currently discounted?",
-]
-DATABASE_ANSWERS = [
-    "The AirStream Wireless Earbuds (AUDIO-103) currently have 47 units in stock.",
-    "Yes, the NexGen Pro Gaming Console (GAME-1101) is available with 12 units remaining.",
-    "The CrystalView 4K Smart TV 65\" (TV-1301-65) has 8 units in stock.",
-    "The PlayStation 5 (GAME-1102) is currently out of stock. We expect restocking next week.",
-    "Yes, the PulseSync Fitness Tracker (WEAR-201) has 31 units available.",
-    "The NexusWave Pro Headphones (AUDIO-101) are priced at $349.99.",
-    "The BudgetSmart LED TV 55\" (TV-1303-55) is priced at $399.99.",
-    "The ProGamer Controller (GAME-1201) is priced at $69.99.",
-    "Order ORD-10482 is currently in transit and estimated to arrive within 2 business days.",
-    "Order ORD-77210 shipped yesterday via FedEx. Tracking number: FX-9921047.",
-    "Order ORD-33891 has shipped and is currently out for delivery.",
-    "Order ORD-55124 is currently at the regional sorting facility in Dallas, TX.",
-    "Yes! There's currently a 20% discount on all GAME category products through end of month.",
-    "The SonicBlast Studio Headphones (AUDIO-102) have a $40 discount applied right now.",
-    "The BudgetSmart LED TV range has a 15% promotional discount running this week.",
-    "The Racing Wheel Pro is stocked at 6 store locations. The nearest to you is Store S-04.",
-    "The NexusWave Pro Headphones and AirStream Earbuds both have active promotions.",
-]
-DATABASE_SQLS = [
-    "SELECT stock_level FROM store_inventory si JOIN products p ON si.product_id = p.product_id WHERE p.name LIKE '%AirStream Wireless Earbuds%'",
-    "SELECT in_stock, name FROM products WHERE product_id = 'GAME-1101'",
-    "SELECT in_stock FROM products WHERE product_id = 'TV-1301-65'",
-    "SELECT in_stock FROM products WHERE product_id = 'GAME-1102'",
-    "SELECT in_stock FROM products WHERE product_id = 'WEAR-201'",
-    "SELECT price FROM products WHERE product_id = 'AUDIO-101'",
-    "SELECT price FROM products WHERE product_id = 'TV-1303-55'",
-    "SELECT price FROM products WHERE product_id = 'GAME-1201'",
-    "SELECT status, current_location, days_since_order FROM orders WHERE order_id = 'ORD-10482'",
-    "SELECT status, current_location FROM orders WHERE order_id = 'ORD-77210'",
-    "SELECT status, current_location FROM orders WHERE order_id = 'ORD-33891'",
-    "SELECT current_location, status FROM orders WHERE order_id = 'ORD-55124'",
-    "SELECT p.name, pr.discount_percent FROM promotions pr JOIN products p ON pr.product_ids LIKE '%' || p.product_id || '%' WHERE p.category = 'GAME'",
-    "SELECT p.name, pr.discount_amount FROM promotions pr JOIN products p ON pr.product_ids LIKE '%AUDIO-102%'",
-    "SELECT p.name, pr.discount_percent FROM promotions pr JOIN products p ON p.category = 'TV' AND pr.product_ids LIKE '%' || p.product_id || '%'",
-    "SELECT s.store_id, si.stock_level FROM store_inventory si JOIN stores s ON si.store_id = s.store_id JOIN products p ON si.product_id = p.product_id WHERE p.product_id = 'GAME-1202'",
-    "SELECT p.name, pr.discount_amount FROM promotions pr JOIN products p ON pr.product_ids LIKE '%' || p.product_id || '%' WHERE p.category = 'AUDIO'",
-]
-
-POLICY_QUESTIONS = [
-    "What is your return policy?",
-    "How long does standard shipping take?",
-    "Do you offer a warranty on electronics?",
-    "Can I return a TV after 30 days if it's unopened?",
-    "What happens if my item arrives damaged?",
-    "Do you ship internationally?",
-    "Is there a restocking fee for returned gaming consoles?",
-    "What does the warranty cover on headphones?",
-    "How do I initiate a return for my order?",
-    "Does the warranty cover the NexGen Pro Gaming Console?",
-]
-POLICY_ANSWERS = [
-    "We accept returns within 30 days of purchase with proof of receipt for all items in original condition.",
-    "Standard shipping takes 5–7 business days. Express shipping (2-day) is available at checkout.",
-    "All electronics carry a 1-year limited manufacturer warranty covering defects in materials and workmanship.",
-    "Unopened TVs may be returned within 30 days. Large-screen TVs (65\"+) require a scheduled pickup.",
-    "If your item arrives damaged, contact us within 48 hours with a photo and we'll send a replacement or issue a full refund.",
-    "We ship to over 40 countries. International delivery takes 10–14 business days and customs fees may apply.",
-    "Gaming consoles are subject to a 15% restocking fee if opened. Unopened units carry no restocking fee.",
-    "Headphone warranties cover manufacturing defects and driver failures but not physical damage or water damage.",
-    "To initiate a return, visit your order history, select the item, and click 'Request Return'. You'll receive a prepaid label within 24 hours.",
-    "Yes, the NexGen Pro Gaming Console is covered by a 1-year manufacturer warranty from the purchase date.",
-]
-POLICY_CONTEXTS = [
-    "Return Policy: All items eligible for return within 30 days in original condition with receipt...",
-    "Shipping Policy: Standard 5-7 business days. Express 2-day available. Free standard shipping on orders over $50...",
-    "Warranty Policy: 1-year limited warranty on all electronics covering defects in materials and workmanship...",
-    "Extended Returns: Large TVs require scheduled pickup for returns. Unopened items accepted up to 30 days...",
-    "Damaged Items: Customer must report within 48 hours with photographic evidence. Replacement or full refund issued...",
-    "International Shipping: Available to 40+ countries. 10-14 business day delivery. Customs fees are customer responsibility...",
-    "Restocking Fees: 15% restocking fee applies to opened gaming hardware. No fee for unopened items...",
-    "Headphone Warranty: Covers driver failure and manufacturing defects. Excludes physical damage, water damage, and wear...",
-    "Returns Process: Initiate via order history portal. Prepaid return label emailed within 24 hours of request...",
-    "Product Warranty: NexGen Pro Gaming Console covered under standard 1-year limited warranty from purchase date...",
+DATABASE_TURNS = [
+    {
+        "question": "How many AirStream Wireless Earbuds do you have in stock?",
+        "answer":   "The AirStream Wireless Earbuds (AUDIO-103) currently have 47 units in stock.",
+        "sql":      "SELECT stock_level FROM store_inventory si JOIN products p ON si.product_id = p.product_id WHERE p.name LIKE '%AirStream Wireless Earbuds%'",
+        "follow_ups": [
+            ("Are they available in white?",           "Yes, the AirStream Wireless Earbuds are available in white, black, and navy blue."),
+            ("Great, what's the price?",               "The AirStream Wireless Earbuds are priced at $79.99."),
+            ("Do they come with a warranty?",          "Yes, all Ohm audio products include a 1-year limited warranty."),
+        ]
+    },
+    {
+        "question": "Is the NexGen Pro Gaming Console available?",
+        "answer":   "Yes, the NexGen Pro Gaming Console (GAME-1101) is available with 12 units remaining.",
+        "sql":      "SELECT in_stock, name FROM products WHERE product_id = 'GAME-1101'",
+        "follow_ups": [
+            ("How much does it cost?",                 "The NexGen Pro Gaming Console is priced at $499.99."),
+            ("Does it come with any games?",           "The NexGen Pro Gaming Console comes bundled with one controller and a 1-month game pass."),
+            ("Can I pick it up in store?",             "Yes, you can reserve it for in-store pickup. Which city are you located in?"),
+        ]
+    },
+    {
+        "question": "Do you have the CrystalView 4K Smart TV in 65 inch?",
+        "answer":   "The CrystalView 4K Smart TV 65\" (TV-1301-65) has 8 units in stock.",
+        "sql":      "SELECT in_stock FROM products WHERE product_id = 'TV-1301-65'",
+        "follow_ups": [
+            ("What's the price on that?",              "The CrystalView 4K Smart TV 65\" is priced at $1,199.99."),
+            ("Is there a wall mount included?",        "The TV does not include a wall mount, but we carry compatible mounts starting at $39.99."),
+            ("What's the return policy on TVs?",       "TVs can be returned within 30 days. Units 65\" and larger require a scheduled pickup."),
+        ]
+    },
+    {
+        "question": "What's the stock level for the PlayStation 5?",
+        "answer":   "The PlayStation 5 (GAME-1102) is currently out of stock. We expect restocking next week.",
+        "sql":      "SELECT in_stock FROM products WHERE product_id = 'GAME-1102'",
+        "follow_ups": [
+            ("Can I be notified when it's back?",      "Yes! You can sign up for a restock alert on the product page and we'll email you immediately."),
+            ("Do you have any PS5 bundles?",           "We currently have a PS5 + extra controller bundle reserved for the restock. Would you like to be added to the waitlist?"),
+            ("What about the NexGen Pro instead?",     "The NexGen Pro Gaming Console (GAME-1101) is available now with 12 units in stock at $499.99."),
+        ]
+    },
+    {
+        "question": "How much does the NexusWave Pro Headphones cost?",
+        "answer":   "The NexusWave Pro Headphones (AUDIO-101) are priced at $349.99.",
+        "sql":      "SELECT price FROM products WHERE product_id = 'AUDIO-101'",
+        "follow_ups": [
+            ("Is there any discount available?",       "There is currently a $30 promotional discount on the NexusWave Pro, bringing it to $319.99."),
+            ("How do they compare to the SonicBlast?", "The NexusWave Pro offers active noise cancellation and 30-hour battery life. The SonicBlast is studio-focused with a flatter sound profile."),
+            ("What's the return policy if I don't like them?", "Headphones can be returned within 30 days in original condition with receipt."),
+        ]
+    },
+    {
+        "question": "Where is my order? My order ID is ORD-10482.",
+        "answer":   "Order ORD-10482 is currently in transit and estimated to arrive within 2 business days.",
+        "sql":      "SELECT status, current_location, days_since_order FROM orders WHERE order_id = 'ORD-10482'",
+        "follow_ups": [
+            ("Which carrier is handling it?",          "Order ORD-10482 is being shipped via UPS. Your tracking number is 1Z999AA10123456784."),
+            ("Can I change the delivery address?",     "Address changes are possible if the order hasn't reached the final sorting facility. I'll flag this for our shipping team."),
+            ("What if it doesn't arrive on time?",     "If your order is delayed past the estimated delivery date, contact us and we'll initiate an investigation with the carrier."),
+        ]
+    },
+    {
+        "question": "Can you check the status of order ORD-77210?",
+        "answer":   "Order ORD-77210 shipped yesterday via FedEx. Tracking number: FX-9921047.",
+        "sql":      "SELECT status, current_location FROM orders WHERE order_id = 'ORD-77210'",
+        "follow_ups": [
+            ("When is the expected delivery?",         "Based on the FedEx tracking, ORD-77210 is expected to arrive this Thursday."),
+            ("Can I see what's in that order?",        "Order ORD-77210 contains: 1x NexusWave Pro Headphones and 1x MultiCharge Cable Set."),
+            ("Thanks, that's all I needed.",           "Great! Don't hesitate to reach out if anything else comes up."),
+        ]
+    },
+    {
+        "question": "Are there any deals on gaming products right now?",
+        "answer":   "Yes! There's currently a 20% discount on all GAME category products through end of month.",
+        "sql":      "SELECT p.name, pr.discount_percent FROM promotions pr JOIN products p ON pr.product_ids LIKE '%' || p.product_id || '%' WHERE p.category = 'GAME'",
+        "follow_ups": [
+            ("Does that include the NexGen Pro Console?", "Yes, the NexGen Pro Gaming Console is included in the promotion — 20% off brings it to $399.99."),
+            ("What about the ProGamer Controller?",    "Yes, the ProGamer Controller is also 20% off, down to $55.99 from $69.99."),
+            ("How long is the sale running?",          "The gaming promotion runs through the end of this month."),
+        ]
+    },
+    {
+        "question": "What is the price of the BudgetSmart LED TV 55 inch?",
+        "answer":   "The BudgetSmart LED TV 55\" (TV-1303-55) is priced at $399.99.",
+        "sql":      "SELECT price FROM products WHERE product_id = 'TV-1303-55'",
+        "follow_ups": [
+            ("Is there a 65 inch version?",            "Yes, the BudgetSmart LED TV 65\" (TV-1303-65) is available at $549.99."),
+            ("Does it support 4K?",                    "The BudgetSmart LED TV supports 4K resolution with HDR and built-in smart TV features."),
+            ("Any promotions on it right now?",        "The BudgetSmart LED TV range has a 15% promotional discount running this week."),
+        ]
+    },
 ]
 
-CHAT_QUESTIONS = [
-    "Hi, can you help me?",
-    "Thanks, that answered my question!",
-    "Okay got it, appreciate the help.",
-    "You're really helpful, thank you!",
-    "No that's all I needed, thanks.",
-    "Hello!",
-    "Great, I'll go ahead and place the order.",
-    "Perfect, that's exactly what I was looking for.",
-    "Sounds good, talk later!",
-    "Thanks for looking that up!",
+POLICY_TURNS = [
+    {
+        "question": "What is your return policy?",
+        "answer":   "We accept returns within 30 days of purchase with proof of receipt for all items in original condition.",
+        "context":  "Return Policy: All items eligible for return within 30 days in original condition with receipt...",
+        "follow_ups": [
+            ("What if I lost my receipt?",             "Without a receipt, we can look up your purchase using the order ID or the email address used at checkout."),
+            ("Can I return an opened item?",           "Opened items are returnable within 30 days. Some categories like gaming hardware have a 15% restocking fee if opened."),
+            ("How long does the refund take?",         "Refunds are processed within 3-5 business days after we receive the item."),
+        ]
+    },
+    {
+        "question": "How long does standard shipping take?",
+        "answer":   "Standard shipping takes 5–7 business days. Express shipping (2-day) is available at checkout.",
+        "context":  "Shipping Policy: Standard 5-7 business days. Express 2-day available...",
+        "follow_ups": [
+            ("Is there free shipping?",                "Yes, standard shipping is free on all orders over $50."),
+            ("Can I upgrade to express after ordering?", "Shipping upgrades are possible if the order hasn't been picked up by the carrier yet. Contact us immediately after placing your order."),
+            ("Do you ship on weekends?",               "Orders placed Friday after 3pm through Sunday will begin processing on Monday."),
+        ]
+    },
+    {
+        "question": "Do you offer a warranty on electronics?",
+        "answer":   "All electronics carry a 1-year limited manufacturer warranty covering defects in materials and workmanship.",
+        "context":  "Warranty Policy: 1-year limited warranty on all electronics...",
+        "follow_ups": [
+            ("Does it cover accidental damage?",       "The standard warranty does not cover accidental damage. We do offer an extended protection plan that covers accidental damage for an additional fee."),
+            ("How do I make a warranty claim?",        "To make a warranty claim, contact our support team with your order ID and a description of the issue. We'll guide you through the process."),
+            ("Can I extend the warranty?",             "Yes, we offer 2-year and 3-year extended protection plans available for purchase within 30 days of your order."),
+        ]
+    },
+    {
+        "question": "What happens if my item arrives damaged?",
+        "answer":   "If your item arrives damaged, contact us within 48 hours with a photo and we'll send a replacement or issue a full refund.",
+        "context":  "Damaged Items: Customer must report within 48 hours with photographic evidence...",
+        "follow_ups": [
+            ("Do I need to return the damaged item?",  "For most damaged items, we don't require a return — we'll send a replacement immediately after verifying the damage photo."),
+            ("What if it's been more than 48 hours?",  "We recommend contacting us as soon as possible. While the 48-hour window is our standard policy, we review late reports on a case-by-case basis."),
+            ("How quickly will the replacement arrive?", "Replacement orders are prioritized and typically shipped within 24 hours via express delivery."),
+        ]
+    },
+    {
+        "question": "Do you ship internationally?",
+        "answer":   "We ship to over 40 countries. International delivery takes 10–14 business days and customs fees may apply.",
+        "context":  "International Shipping: Available to 40+ countries. 10-14 business day delivery...",
+        "follow_ups": [
+            ("Which countries do you ship to?",        "We ship to most countries in Europe, Asia-Pacific, and North America. You can see the full list at checkout when entering your address."),
+            ("Who pays the customs fees?",             "Customs and import duties are the responsibility of the recipient and vary by country."),
+            ("Is express international shipping available?", "We offer international express shipping (5-7 days) to select countries for an additional fee."),
+        ]
+    },
+    {
+        "question": "Is there a restocking fee for returned gaming consoles?",
+        "answer":   "Gaming consoles are subject to a 15% restocking fee if opened. Unopened units carry no restocking fee.",
+        "context":  "Restocking Fees: 15% restocking fee applies to opened gaming hardware...",
+        "follow_ups": [
+            ("What counts as opened?",                 "Any item where the original factory seal has been broken is considered opened."),
+            ("Is there a restocking fee for TVs?",     "There is no restocking fee for TVs returned within 30 days, opened or unopened."),
+            ("Can the fee be waived?",                 "Restocking fees may be waived in cases of manufacturer defect or if the wrong item was shipped. Standard returns are subject to the policy."),
+        ]
+    },
+    {
+        "question": "How do I initiate a return for my order?",
+        "answer":   "To initiate a return, visit your order history, select the item, and click 'Request Return'. You'll receive a prepaid label within 24 hours.",
+        "context":  "Returns Process: Initiate via order history portal. Prepaid return label emailed within 24 hours...",
+        "follow_ups": [
+            ("I don't have an account, can I still return?", "Yes, you can initiate a return by contacting us with your order ID and the email used at checkout."),
+            ("How do I pack the item?",                "Please pack the item in its original packaging if possible and include all accessories. Attach the prepaid label to the outside of the box."),
+            ("When will I get my refund?",             "Refunds are processed within 3-5 business days of us receiving the returned item."),
+        ]
+    },
 ]
-CHAT_ANSWERS = [
-    "Of course! What can I help you with today?",
-    "Happy to help! Let me know if anything else comes up.",
-    "Anytime! Don't hesitate to reach out.",
-    "Glad I could assist! Is there anything else you need?",
-    "Great! Come back if you have any other questions.",
-    "Hi there! How can I assist you today?",
-    "Sounds great! Feel free to reach out if you need anything after your order arrives.",
-    "Wonderful! Let me know if you need help with anything else.",
-    "Take care! We're here if you need us.",
-    "My pleasure! Let me know if there's anything else I can help with.",
+
+CHAT_TURNS = [
+    {
+        "question": "Hi, can you help me?",
+        "answer":   "Of course! What can I help you with today?",
+        "follow_ups": [
+            ("I'm looking for a gift for a gamer.",    "Great choice! We have a wide range of gaming products. Are you looking for a console, controller, or accessories?"),
+            ("I need help with my recent order.",      "I'd be happy to help. Could you share your order ID so I can look it up?"),
+            ("Just browsing, thanks!",                 "No problem! Let me know if anything catches your eye."),
+        ]
+    },
+    {
+        "question": "Hello!",
+        "answer":   "Hi there! How can I assist you today?",
+        "follow_ups": [
+            ("Do you have any sales going on?",        "Yes! We currently have a 20% discount on all gaming products and 15% off the BudgetSmart TV range."),
+            ("I have a quick question about returns.", "Of course, I'm happy to help. What would you like to know?"),
+            ("Never mind, I found what I needed.",     "Great! Feel free to come back if you have any other questions."),
+        ]
+    },
+    {
+        "question": "Thanks, that answered my question!",
+        "answer":   "Happy to help! Let me know if anything else comes up.",
+        "follow_ups": [
+            ("Actually, one more thing — do you price match?", "Yes, we offer price matching on identical items sold by major retailers. Send us the competitor's listing and we'll review it."),
+            ("You've been really helpful, thank you.", "It's my pleasure! Have a great day."),
+        ]
+    },
+    {
+        "question": "Great, I'll go ahead and place the order.",
+        "answer":   "Sounds great! Feel free to reach out if you need anything after your order arrives.",
+        "follow_ups": [
+            ("How will I know when it ships?",         "You'll receive a shipping confirmation email with a tracking number as soon as your order is dispatched."),
+            ("Can I add something to the order?",      "Unfortunately orders can't be modified once placed, but you're welcome to place a second order and we can look into combining shipping."),
+        ]
+    },
 ]
 
 ROUTE_WEIGHTS = [0.50, 0.35, 0.15]  # DATABASE, POLICY, CHAT
@@ -191,31 +276,27 @@ def classification_score():
 
 def frustration_score(turn_scores):
     base = random.choices([0.0, 0.1, 0.3, 0.6, 0.9, 1.0], weights=[35, 25, 20, 10, 7, 3])[0]
-    # Nudge frustration up if helpfulness was consistently low
     avg_helpfulness = sum(turn_scores) / len(turn_scores) if turn_scores else 1.0
     if avg_helpfulness < 0.4:
         base = min(1.0, base + 0.3)
     return round(base, 2)
 
 # ──────────────────────────────────────────────────────────────────────────────
-# TRACE BUILDER — mirrors the real OhmBot span hierarchy exactly
-# Input/output use {"user": ...} / {"assistant": ...} so the Opik thread UI
-# renders them as clean chat messages rather than raw JSON.
-# Returns only the final answer so it can be appended to chat_history.
+# TRACE BUILDER
+# question and answer are always selected together from the same turn dict
+# so they are guaranteed to match. Returns (question, answer) so the main
+# loop can build realistic chat_history for the next turn.
 # ──────────────────────────────────────────────────────────────────────────────
-def log_trace(thread_id, turn_index, question, chat_history, trace_start):
-    route     = random.choices(["DATABASE", "POLICY", "CHAT"], weights=ROUTE_WEIGHTS)[0]
+def log_trace(thread_id, turn_index, question, answer, route, chat_history, trace_start, sql=None, context=None):
     total_dur = random.uniform(1.2, 9.0)
     t         = trace_start
 
     # ── Root trace ─────────────────────────────────────────────────────────
-    # NOTE: input={"user": ...} and output={"assistant": ...} are the keys
-    # Opik uses to render the thread messages view cleanly.
     trace = client.trace(
         name         = "OhmBot_Support",
         project_name = PROJECT_NAME,
         input        = {"user": question},
-        output       = None,  # set at trace.end() once we have the final answer
+        output       = None,
         tags         = ["production", route.lower()],
         metadata     = {
             "environment" : "production",
@@ -251,13 +332,7 @@ def log_trace(thread_id, turn_index, question, chat_history, trace_start):
     t += timedelta(seconds=router_dur)
 
     # ── Workflow branches ──────────────────────────────────────────────────
-    final_answer = ""
-
     if route == "DATABASE":
-        idx          = random.randrange(len(DATABASE_QUESTIONS))
-        sql          = DATABASE_SQLS[idx]
-        final_answer = DATABASE_ANSWERS[idx]
-
         sql_gen_dur = random.uniform(0.8, 2.5)
         sql_gen = trace.span(
             name       = "SQL_Generation_Step",
@@ -289,7 +364,7 @@ def log_trace(thread_id, turn_index, question, chat_history, trace_start):
             name       = "SQL_Final_Answer_Step",
             type       = "llm", model=MODEL, provider="openai",
             input      = {"messages": [{"role": "user", "content": question}]},
-            output     = {"choices": [{"message": {"content": final_answer}}]},
+            output     = {"choices": [{"message": {"content": answer}}]},
             usage      = make_usage(200, 500, 40, 150),
             start_time = t,
             end_time   = t + timedelta(seconds=final_dur),
@@ -297,10 +372,6 @@ def log_trace(thread_id, turn_index, question, chat_history, trace_start):
         final_span.end()
 
     elif route == "POLICY":
-        idx          = random.randrange(len(POLICY_QUESTIONS))
-        context      = POLICY_CONTEXTS[idx]
-        final_answer = POLICY_ANSWERS[idx]
-
         rag_gen_dur = random.uniform(0.6, 1.8)
         rag_gen = trace.span(
             name       = "RAG_Query_Generation",
@@ -336,7 +407,7 @@ def log_trace(thread_id, turn_index, question, chat_history, trace_start):
                 {"role": "tool",   "content": context},
                 {"role": "user",   "content": question},
             ]},
-            output     = {"choices": [{"message": {"content": final_answer}}]},
+            output     = {"choices": [{"message": {"content": answer}}]},
             usage      = make_usage(250, 600, 50, 200),
             start_time = t,
             end_time   = t + timedelta(seconds=final_dur),
@@ -344,27 +415,25 @@ def log_trace(thread_id, turn_index, question, chat_history, trace_start):
         final_span.end()
 
     else:  # CHAT
-        idx          = random.randrange(len(CHAT_QUESTIONS))
-        final_answer = CHAT_ANSWERS[idx]
-        chat_dur     = random.uniform(0.4, 1.2)
-        chat_span    = trace.span(
+        chat_dur  = random.uniform(0.4, 1.2)
+        chat_span = trace.span(
             name       = "run_chat_workflow",
             type       = "llm", model=MODEL, provider="openai",
             input      = {"messages": [
                 {"role": "system", "content": "You are a helpful customer support assistant."},
                 {"role": "user",   "content": question},
             ]},
-            output     = {"choices": [{"message": {"content": final_answer}}]},
+            output     = {"choices": [{"message": {"content": answer}}]},
             usage      = make_usage(50, 150, 20, 80),
             start_time = t,
             end_time   = t + timedelta(seconds=chat_dur),
         )
         chat_span.end()
 
-    # ── Close root trace with {"assistant": ...} output for thread UI ──────
+    # ── Close root trace ───────────────────────────────────────────────────
     trace.end(
         end_time = trace_start + timedelta(seconds=total_dur),
-        output   = {"assistant": final_answer},
+        output   = {"assistant": answer},
     )
     trace.log_feedback_score(
         name   = "answer_helpfulness",
@@ -372,57 +441,74 @@ def log_trace(thread_id, turn_index, question, chat_history, trace_start):
         reason = "Synthetic user rating",
     )
 
-    # Return only the answer — used to build chat_history for the next turn
-    return final_answer
-
 
 # ──────────────────────────────────────────────────────────────────────────────
 # MAIN LOOP
+# Each thread picks one turn dict (first turn) then uses that dict's follow_ups
+# for subsequent turns — so every conversation stays on topic.
 # ──────────────────────────────────────────────────────────────────────────────
 now          = datetime.now(timezone.utc)
 total_traces = 0
 
 for _ in tqdm(range(NUM_THREADS), desc="Seeding OhmBot traces", unit="thread"):
     thread_id    = f"session-{uuid.uuid4().hex[:12]}"
-    num_turns    = random.choices([1, 2, 3, 4, 5], weights=[40, 25, 18, 10, 7])[0]
+    num_turns    = random.choices([1, 2, 3, 4], weights=[35, 35, 20, 10])[0]
     days_ago     = random.betavariate(2, 5) * DAYS_BACK
     thread_start = now - timedelta(days=days_ago, minutes=random.randint(0, 120))
+
+    # Pick route and a matching turn dict for this whole thread
+    route = random.choices(["DATABASE", "POLICY", "CHAT"], weights=ROUTE_WEIGHTS)[0]
+    if route == "DATABASE":
+        turn_dict = random.choice(DATABASE_TURNS)
+    elif route == "POLICY":
+        turn_dict = random.choice(POLICY_TURNS)
+    else:
+        turn_dict = random.choice(CHAT_TURNS)
+
+    # Shuffle follow-ups so repeated threads with same dict feel different
+    follow_ups = list(turn_dict.get("follow_ups", []))
+    random.shuffle(follow_ups)
 
     chat_history = []
     turn_scores  = []
 
     for turn in range(num_turns):
-        turn_start = thread_start + timedelta(minutes=turn * random.uniform(1, 8))
-        route_hint = random.choices(["DATABASE", "POLICY", "CHAT"], weights=ROUTE_WEIGHTS)[0]
+        turn_start = thread_start + timedelta(minutes=turn * random.uniform(2, 8))
 
-        if route_hint == "DATABASE":
-            question = random.choice(DATABASE_QUESTIONS)
-        elif route_hint == "POLICY":
-            question = random.choice(POLICY_QUESTIONS)
+        if turn == 0:
+            # First turn: use the primary question/answer from the turn dict
+            question = turn_dict["question"]
+            answer   = turn_dict["answer"]
+        elif follow_ups:
+            # Subsequent turns: use a follow-up from the same topic
+            question, answer = follow_ups.pop(0)
+            # Follow-ups are conversational — route them through CHAT workflow
+            # unless the thread is DATABASE/POLICY and it's a content follow-up
+            route = route if turn == 1 else "CHAT"
         else:
-            question = random.choice(CHAT_QUESTIONS)
+            # Ran out of follow-ups — close the thread naturally
+            question = "Thanks, that's all I needed!"
+            answer   = "Happy to help! Don't hesitate to reach out if anything comes up."
+            route    = "CHAT"
 
-        answer = log_trace(
+        log_trace(
             thread_id    = thread_id,
             turn_index   = turn,
             question     = question,
+            answer       = answer,
+            route        = route,
             chat_history = chat_history,
             trace_start  = turn_start,
+            sql          = turn_dict.get("sql"),
+            context      = turn_dict.get("context"),
         )
 
-        # Track helpfulness for frustration calculation at thread close
         turn_scores.append(helpfulness_score())
-
-        # Build conversation history for the next turn
         chat_history.append({"role": "user",      "content": question})
         chat_history.append({"role": "assistant",  "content": answer})
         total_traces += 1
 
-    # ── Flush so all traces land before scoring the thread ─────────────────
-    # Threads must be inactive to accept feedback scores. We flush here to
-    # ensure traces are delivered, then attempt scoring. Threads that are
-    # still marked active server-side will be skipped silently — they will
-    # auto-close after 15 minutes of inactivity.
+    # ── Flush then attempt thread-level frustration score ──────────────────
     client.flush()
     try:
         client.log_threads_feedback_scores(
@@ -434,6 +520,6 @@ for _ in tqdm(range(NUM_THREADS), desc="Seeding OhmBot traces", unit="thread"):
             }]
         )
     except Exception:
-        pass  # Thread still active — score silently skipped
+        pass  # Thread still active — will auto-close after 15 min inactivity
 
 print(f"✅ Seeded {total_traces} traces across {NUM_THREADS} threads into '{PROJECT_NAME}'.")
